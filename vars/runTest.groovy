@@ -1,3 +1,5 @@
-def call() {
-    sh "docker run --rm ktdrive-shared:${env.BUILD_NUMBER}"
+
+import  com.example.Docker
+def call(String imageName) {
+    return new Docker(this).runTest(imageName)
 }

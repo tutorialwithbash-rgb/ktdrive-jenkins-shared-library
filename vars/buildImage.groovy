@@ -1,3 +1,5 @@
-def call() {
-    sh "docker build --tag ktdrive-shared:${env.BUILD_NUMBER} ."
+
+import  com.example.Docker
+def call(String imageName) {
+    return new Docker(this).buildDockerImage(imageName)
 }
