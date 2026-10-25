@@ -2,5 +2,5 @@
 
 
 def call() {
-    echo "Build docker image"
+    sh "docker build --tag ktdrive-shared:${env.BUILD_NUMBER} ."
 }
