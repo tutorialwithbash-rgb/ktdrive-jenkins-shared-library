@@ -1,19 +1,19 @@
 def call(LinkedHashMap config = [:]) {
     withCredentials([
             usernamePassword(
-                    credentialsId: config.get('credentialsId') ?: 'github-credentials',
+                    credentialsId: config.get('credentialsId'),
                     usernameVariable: 'USER',
-                    passwordVariable: 'PASSW'
+                    passwordVariable: 'PASS'
             )
     ]) {
         sh """
             set +x
             set -eu
 
-            git config user.name "${config.get('gitUserName') ?: 'Jenkins'}"
-            git config user.email "${config.get('gitUserEmail') ?: 'jenkins@ktdrive.com'}"
+            git config --global user.name "${config.get('gitUserName')}"
+            git config --global user.email "${config.get('gitUserEmail')}"
 
-            git remote set-url origin "https://\\${USER}:\\${PASSW}@github.com/${config.get('repository')}"
+            git remote set-url origin "https://\\${USER}:\\${PASS}@github.com/${config.get('repository')}"
 
             git add package.json
 
