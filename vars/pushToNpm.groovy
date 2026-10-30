@@ -9,8 +9,12 @@ def call(LinkedHashMap config = [:]) {
         sh '''
             set +x
             set -eu
-            trap 'rm -f .npmrc' EXIT
 
+            # Install project dependencies, including devDependencies
+            bun install --frozen-lockfile
+
+            # Authenticate with GitHub Packages
+            trap 'rm -f .npmrc' EXIT
             printf '//npm.pkg.github.com/:_authToken=%s\\n' \
                 "$GITHUB_TOKEN" > .npmrc
 
