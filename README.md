@@ -120,7 +120,7 @@ commitVersionUpdate(
 )
 ```
 
-`branch` is optional and defaults to `jenkins-job`. The Jenkins credential must be authorized to push to the repository. The step updates the `origin` remote URL for the push and adds `[skip ci]` to the commit message.
+`branch` is optional and defaults to `jenkins-job`. The password in the Jenkins username/password credential must be a valid GitHub personal access token with write access to the target repository (for a fine-grained token, grant **Contents: read and write**); the username should be the GitHub account associated with that token. The step supplies credentials through a temporary Git askpass helper rather than embedding the token in the remote URL, and adds `[skip ci]` to the commit message.
 
 ## Notes
 
