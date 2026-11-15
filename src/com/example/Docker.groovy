@@ -13,21 +13,6 @@ class Docker implements Serializable {
         String dockerfilePath = "Dockerfile",
         String context = "."
     ) {
-        script.echo "Building the Docker image..."
-
-        script.sh """
-            docker build \
-                -f ${dockerfilePath} \
-                -t ${imageName} \
-                ${context}
-        """
-    }
-
-    def buildDockerImageWithGitHubToken(
-        String imageName,
-        String dockerfilePath = "Dockerfile",
-        String context = "."
-    ) {
         script.echo "Building Docker image with GitHub Packages authentication..."
 
         script.withCredentials([
@@ -38,7 +23,8 @@ class Docker implements Serializable {
         ]) {
             script.sh """
                 docker buildx build \
-                    --secret id=GITHUB_TOKEN,env=GITHUB_TOKEN \
+                    --secret id=github_token,env=GITHUB_TOKEN \
+                    --load \
                     -f ${dockerfilePath} \
                     -t ${imageName} \
                     ${context}
