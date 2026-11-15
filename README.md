@@ -1,46 +1,32 @@
 # KTDrive Jenkins Shared Library
 
-This repository contains a small set of Jenkins shared-library steps for Docker image builds, Docker Hub pushes, version bumps, and GitHub package publishing. The public entry points live in `vars/`; the implementation logic is in `src/com/example/Docker.groovy`.
+This Jenkins Shared Library provides reusable Pipeline steps for building and
+publishing Docker images, updating an npm package version, publishing a package
+to GitHub Packages, and committing a version change.
 
-## Current implementation
+## Configure the library
 
-The repository currently exposes these pipeline steps:
+1. In Jenkins, add this repository under **Manage Jenkins → System → Global
+   Pipeline Libraries**.
+2. Set a library name (for example, `ktdrive`), the repository URL, and the
+   default branch or version.
+3. Add the Jenkins credentials required by the steps you plan to use. See
+   [Credentials](#credentials) for the credential types and IDs.
+4. Ensure the build agent has the tools required by those steps: Docker with
+   Buildx for image builds, Git for version commits, and Node.js/npm and Bun
+   for package operations.
 
-- `buildImage(imageName, dockerfilePath = 'Dockerfile', context = '.')`
-- `dockerLogin()`
-- `dockerPush(imageName)`
-- `incrementVersion(releaseType = 'patch')`
-- `pushToNpm(config = [:])`
-- `commitVersionUpdate(config = [:])`
+Import the library at the top of a Jenkinsfile:
 
-There is also a `runTest.groovy` wrapper, but the underlying `Docker` class does not currently define `runTest(String)`. In other words, the wrapper exists, but the method it calls is not implemented yet.
-
-## Repository layout
-
-```text
-.
-├── src/
-│   ├── Main.groovy                 # Standalone example entry point
-│   └── com/example/Docker.groovy  # Docker helpers used by the vars scripts
-├── vars/
-│   ├── buildImage.groovy           # buildImage(imageName, dockerfilePath, context)
-│   ├── dockerLogin.groovy          # dockerLogin()
-│   ├── dockerPush.groovy           # dockerPush(imageName)
-│   ├── incrementVersion.groovy     # incrementVersion(releaseType)
-│   ├── pushToNpm.groovy            # pushToNpm(config)
-│   ├── commitVersionUpdate.groovy # commitVersionUpdate(config)
-│   └── runTest.groovy             # runTest(imageName) wrapper (not implemented in Docker.groovy)
-└── README.md
+```groovy
+@Library('ktdrive') _
 ```
 
-## Jenkins setup
+## Example Pipeline
 
-1. In Jenkins, add this repository as a Global Pipeline Library.
-2. Give the library a name (for example `ktdrive`) and configure the repository URL and branch/tag/commit.
-3. Create the credentials used by the steps in Jenkins and reference them by ID from the pipeline config.
-4. Ensure the agent has Docker, npm, and Bun available when the relevant steps are used.
-
-## Example usage
+This example builds and pushes a Docker image, increments the package's patch
+version, publishes the package, and commits the version update. Remove or
+adjust stages that are not part of your workflow.
 
 ```groovy
 @Library('ktdrive') _
@@ -48,28 +34,35 @@ There is also a `runTest.groovy` wrapper, but the underlying `Docker` class does
 pipeline {
     agent any
 
+    environment {
+        IMAGE_NAME = 'my-dockerhub-user/my-app:ci'
+    }
+
     stages {
         stage('Build image') {
             steps {
                 script {
-                    buildImage('ktdrive-app:ci')
+                    buildImage(env.IMAGE_NAME)
                 }
             }
         }
 
-        stage('Version bump') {
+        stage('Push image') {
+            steps {
+                script {
+                    dockerLogin()
+                    dockerPush(env.IMAGE_NAME)
+                }
+            }
+        }
+
+        stage('Release package') {
             steps {
                 script {
                     def nextVersion = incrementVersion('patch')
-                    echo "Next version: ${nextVersion}"
-                }
-            }
-        }
-
-        stage('Publish package') {
-            steps {
-                script {
-                    pushToNpm(credentialsId: 'github-npm-token')
+                    echo "Publishing version ${nextVersion}"
+                    pushToNpm()
+                    commitVersionUpdate()
                 }
             }
         }
@@ -77,106 +70,157 @@ pipeline {
 }
 ```
 
+`commitVersionUpdate` pushes to the configured branch, so use it only in a
+workflow where the Jenkins checkout and credentials are allowed to push. The
+package must also be configured to publish to GitHub Packages; see the
+`pushToNpm` step below.
+
 ## Pipeline steps
 
 ### `buildImage(String imageName, String dockerfilePath = 'Dockerfile', String context = '.')`
 
-Calls `new Docker(this).buildDockerImage(imageName, dockerfilePath, context)` and runs:
+Builds and loads a Docker image locally using Docker Buildx. The command passes
+the Jenkins secret-text credential `GITHUB_TOKEN` to the build as a BuildKit
+secret named `github_token`:
 
 ```sh
-docker build -f <dockerfilePath> -t <imageName> <context>
+docker buildx build \
+  --secret id=github_token,env=GITHUB_TOKEN \
+  --load \
+  -f <dockerfilePath> \
+  -t <imageName> \
+  <context>
 ```
 
-Example:
+The Dockerfile can consume this secret for authenticated build steps. The
+credential ID is fixed as `GITHUB_TOKEN` in the implementation.
 
 ```groovy
-buildImage('my-app:ci')
-buildImage('my-app:ci', 'docker/Dockerfile', '.')
+buildImage('my-dockerhub-user/my-app:ci')
+buildImage('my-dockerhub-user/my-app:ci', 'docker/Dockerfile', '.')
 ```
+
+The Jenkins agent needs Docker with Buildx support and access to a Docker
+daemon.
 
 ### `dockerLogin()`
 
-Uses a Jenkins `usernamePassword` credential with the default ID `docker-hub-repo` and logs in to Docker Hub using `docker login --password-stdin`.
+Logs in to Docker using Jenkins `usernamePassword` credentials with the fixed
+ID `docker-hub-repo`. It reads the username and password from Jenkins and sends
+the password to `docker login --password-stdin`.
 
 ```groovy
 dockerLogin()
 ```
 
+This step does not accept a credential ID argument. Configure the credential in
+Jenkins with the expected ID, or update the library implementation to use a
+different ID.
+
 ### `dockerPush(String imageName)`
 
-Pushes the named Docker image to the configured registry:
+Pushes an already-built and tagged image to its registry. The push is retried
+up to three times.
 
 ```groovy
-dockerPush('my-app:ci')
+dockerPush('my-dockerhub-user/my-app:ci')
 ```
+
+Log in first with `dockerLogin()` when pushing to Docker Hub. The image name
+should include the appropriate registry namespace and tag.
 
 ### `incrementVersion(String releaseType = 'patch')`
 
-Runs:
-
-```sh
-npm version <releaseType> --no-git-tag-version --ignore-scripts
-```
-
-Allowed values are `major`, `minor`, and `patch`. Unsupported values will fail the step.
+Runs `npm version` with `--no-git-tag-version` and `--ignore-scripts`, updates
+the version in `package.json`, and returns the resulting version string.
+Supported release types are `major`, `minor`, and `patch`; other values fail the
+step.
 
 ```groovy
 def nextVersion = incrementVersion('minor')
+echo "Next version: ${nextVersion}"
 ```
+
+Requires npm and a project `package.json`.
 
 ### `pushToNpm(Map config = [:])`
 
-Uses a Jenkins **Secret text** credential passed as `GITHUB_TOKEN` and runs:
+Installs dependencies with `bun install --frozen-lockfile`, writes a temporary
+`.npmrc` containing a GitHub Packages authentication token, and runs
+`npm publish`. The temporary `.npmrc` is removed when the shell step exits.
 
-```sh
-bun install --frozen-lockfile
-printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN" > .npmrc
-npm publish
-```
-
-Default credential ID: `github-npm-token`
+The optional `credentialsId` setting selects a Jenkins **Secret text**
+credential. It defaults to `github-npm-token`.
 
 ```groovy
+pushToNpm()
 pushToNpm(credentialsId: 'github-npm-token')
 ```
 
+Requires Bun, npm, the project's Bun lockfile, and package metadata configured
+to publish to GitHub Packages (for example, an appropriate `publishConfig`
+registry in `package.json`). The step provides authentication but does not set
+the registry for the package.
+
 ### `commitVersionUpdate(Map config = [:])`
 
-Stages `package.json`, checks whether there are staged changes, and if so commits them with a message ending in `[skip ci]` and pushes to the configured branch.
+Stages `package.json`. If there are staged changes, it commits them with the
+message `chore: update package version [skip ci]` and pushes `HEAD` to the
+configured branch on the existing `origin` remote. If there are no staged
+changes, it prints a message and returns without committing. Any other changes
+already staged in the workspace are included in that commit as well.
 
-Current defaults in the script:
+Supported settings and defaults:
 
-- `credentialsId`: `github-crendentials`
-- `branch`: `main`
-- `gitUserName`: `Jenkins`
-- `gitUserEmail`: `jenkins@ktdrive.com`
-
-This step uses a temporary Git askpass helper and pushes with:
-
-```sh
-git push origin "HEAD:refs/heads/$GIT_BRANCH"
-```
-
-Example:
+| Setting | Default | Description |
+| --- | --- | --- |
+| `credentialsId` | `github-crendentials` | Jenkins `usernamePassword` credential used for the push. Note the default ID is spelled `crendentials` in the implementation. |
+| `branch` | `main` | Destination branch on `origin`. |
+| `gitUserName` | `Jenkins` | Git author name for the commit. |
+| `gitUserEmail` | `jenkins@ktdrive.com` | Git author email for the commit. |
 
 ```groovy
 commitVersionUpdate(
-    credentialsId: 'github-crendentials',
+    credentialsId: 'github-credentials',
+    branch: 'main',
     gitUserName: 'Jenkins',
-    gitUserEmail: 'jenkins@ktdrive.com',
-    branch: 'main'
+    gitUserEmail: 'jenkins@example.com'
 )
 ```
 
-Note: this implementation does not accept a `repository` parameter and does not build a remote URL from one; it pushes to `origin`.
+The `repository` option is not supported; the step pushes to the checkout's
+existing `origin`. Ensure the Jenkins credential has permission to push to the
+target branch.
 
-### `runTest(String imageName)`
+## Credentials
 
-A wrapper exists for this step, but the method is not implemented in `src/com/example/Docker.groovy` at the moment. If this step is needed, the Docker class must include a matching `runTest(String)` method before it can be used in a pipeline.
+| Credential ID | Jenkins type | Used by |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | Secret text | `buildImage` BuildKit secret |
+| `docker-hub-repo` | Username with password | `dockerLogin` |
+| `github-npm-token` | Secret text | `pushToNpm` (default; can be overridden) |
+| `github-crendentials` | Username with password | `commitVersionUpdate` (default; can be overridden) |
 
-## Notes
+Credential IDs are fixed for `buildImage` and `dockerLogin`. The IDs used by
+`pushToNpm` and `commitVersionUpdate` can be overridden through their `config`
+map.
 
-- The shared library is a set of reusable building blocks rather than a full deployment framework.
-- Docker operations require a Jenkins agent with access to a Docker daemon.
-- `src/Main.groovy` is a standalone sample and is not a Jenkins pipeline step.
-- Publishing and version-push steps are side effects that should only be executed in the appropriate release workflow with restricted credentials.
+## Repository layout
+
+```text
+.
+├── src/
+│   └── com/example/Docker.groovy  # Docker build, login, and push implementation
+└── vars/                          # Public Jenkins Pipeline steps
+    ├── buildImage.groovy
+    ├── commitVersionUpdate.groovy
+    ├── dockerLogin.groovy
+    ├── dockerPush.groovy
+    ├── incrementVersion.groovy
+    ├── pushToNpm.groovy
+    └── runTest.groovy
+```
+
+`runTest(imageName)` currently delegates to `Docker.runTest(String)`, but that
+method is not implemented in `src/com/example/Docker.groovy`. Do not call this
+step until the implementation is added.
