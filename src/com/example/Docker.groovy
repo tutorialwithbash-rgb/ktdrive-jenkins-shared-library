@@ -8,18 +8,61 @@ class Docker implements Serializable {
         this.script = script
     }
 
-    def buildDockerImage(String imageName, String dockerfilePath = "Dockerfile", String context = ".") {
-        script.echo "building the docker image..."
-        script.sh "docker build -f ${dockerfilePath} -t ${imageName} ${context}"
+    def buildDockerImage(
+        String imageName,
+        String dockerfilePath = "Dockerfile",
+        String context = "."
+    ) {
+        script.echo "Building the Docker image..."
+
+        script.sh """
+            docker build \
+                -f ${dockerfilePath} \
+                -t ${imageName} \
+                ${context}
+        """
+    }
+
+    def buildDockerImageWithGitHubToken(
+        String imageName,
+        String dockerfilePath = "Dockerfile",
+        String context = "."
+    ) {
+        script.echo "Building Docker image with GitHub Packages authentication..."
+
+        script.withCredentials([
+            script.string(
+                credentialsId: 'GITHUB_TOKEN',
+                variable: 'GITHUB_TOKEN'
+            )
+        ]) {
+            script.sh """
+                docker buildx build \
+                    --secret id=GITHUB_TOKEN,env=GITHUB_TOKEN \
+                    -f ${dockerfilePath} \
+                    -t ${imageName} \
+                    ${context}
+            """
+        }
     }
 
     def dockerLogin() {
-        script.withCredentials([script.usernamePassword(credentialsId: 'docker-hub-repo', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
-            script.sh "echo $script.PASS | docker login -u $script.USER --password-stdin"
+        script.withCredentials([
+            script.usernamePassword(
+                credentialsId: 'docker-hub-repo',
+                passwordVariable: 'PASS',
+                usernameVariable: 'USER'
+            )
+        ]) {
+            script.sh '''
+                echo "$PASS" | docker login \
+                    -u "$USER" \
+                    --password-stdin
+            '''
         }
     }
 
     def dockerPush(String imageName) {
-        script.sh "docker push $imageName"
+        script.sh "docker push ${imageName}"
     }
 }
